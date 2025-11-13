@@ -57,13 +57,20 @@ SDecorationPositioningInfo CHyprBar::getPositioningInfo() {
     static auto* const         PHEIGHT     = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->getDataStaticPtr();
     static auto* const         PENABLED    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:enabled")->getDataStaticPtr();
     static auto* const         PPRECEDENCE = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_precedence_over_border")->getDataStaticPtr();
+    static auto* const         PVERTICAL   = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
 
     SDecorationPositioningInfo info;
-    info.policy         = m_hidden ? DECORATION_POSITION_ABSOLUTE : DECORATION_POSITION_STICKY;
-    info.edges          = DECORATION_EDGE_TOP;
-    info.priority       = **PPRECEDENCE ? 10005 : 5000;
-    info.reserved       = true;
-    info.desiredExtents = {{0, m_hidden || !**PENABLED ? 0 : **PHEIGHT}, {0, 0}};
+    info.policy   = m_hidden ? DECORATION_POSITION_ABSOLUTE : DECORATION_POSITION_STICKY;
+    info.edges    = **PVERTICAL ? DECORATION_EDGE_LEFT : DECORATION_EDGE_TOP;
+    info.priority = **PPRECEDENCE ? 10005 : 5000;
+    info.reserved = true;
+
+    if (**PVERTICAL) {
+        info.desiredExtents = {{0, 0}, {m_hidden || !**PENABLED ? 0 : **PHEIGHT, 0}};
+    } else {
+        info.desiredExtents = {{0, m_hidden || !**PENABLED ? 0 : **PHEIGHT}, {0, 0}};
+    }
+
     return info;
 }
 
@@ -173,6 +180,13 @@ void CHyprBar::onTouchMove(SCallbackInfo& info, ITouch::SMotionEvent e) {
 }
 
 void CHyprBar::handleDownEvent(SCallbackInfo& info, std::optional<ITouch::SDownEvent> touchEvent) {
+    static auto* const PHEIGHT           = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->getDataStaticPtr();
+    static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
+    static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
+    static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
+    static auto* const PONDOUBLECLICK    = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:on_double_click")->getDataStaticPtr();
+    static auto* const PVERTICAL         = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
+
     m_bTouchEv = touchEvent.has_value();
     if (m_bTouchEv)
         m_touchId = touchEvent.value().touchID;
@@ -187,17 +201,18 @@ void CHyprBar::handleDownEvent(SCallbackInfo& info, std::optional<ITouch::SDownE
         COORDS = Vector2D(PMONITOR->m_position.x + e.pos.x * PMONITOR->m_size.x, PMONITOR->m_position.y + e.pos.y * PMONITOR->m_size.y) - assignedBoxGlobal().pos();
     }
 
-    static auto* const PHEIGHT           = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->getDataStaticPtr();
-    static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
-    static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
-    static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
-    static auto* const PONDOUBLECLICK    = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:on_double_click")->getDataStaticPtr();
+    const bool        BUTTONSRIGHT    = std::string{*PALIGNBUTTONS} != "left";
+    const bool        VERTICAL        = **PVERTICAL;
+    const std::string ON_DOUBLE_CLICK = *PONDOUBLECLICK;
 
-    const bool         BUTTONSRIGHT    = std::string{*PALIGNBUTTONS} != "left";
-    const std::string  ON_DOUBLE_CLICK = *PONDOUBLECLICK;
+    bool inBounds;
+    if (VERTICAL) {
+        inBounds = VECINRECT(COORDS, 0, 0, **PHEIGHT - 1, assignedBoxGlobal().h);
+    } else {
+        inBounds = VECINRECT(COORDS, 0, 0, assignedBoxGlobal().w, **PHEIGHT - 1);
+    }
 
-    if (!VECINRECT(COORDS, 0, 0, assignedBoxGlobal().w, **PHEIGHT - 1)) {
-
+    if (!inBounds) {
         if (m_bDraggingThis) {
             if (m_bTouchEv)
                 g_pKeybindManager->m_dispatchers["settiled"]("activewindow");
@@ -264,15 +279,23 @@ void CHyprBar::handleMovement() {
 }
 
 bool CHyprBar::doButtonPress(Hyprlang::INT* const* PBARPADDING, Hyprlang::INT* const* PBARBUTTONPADDING, Hyprlang::INT* const* PHEIGHT, Vector2D COORDS, const bool BUTTONSRIGHT) {
-    //check if on a button
-    float offset = **PBARPADDING;
+    static auto* const PVERTICAL = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
+    const bool         VERTICAL  = **PVERTICAL;
+
+    float              offset    = **PBARPADDING;
 
     for (auto& b : g_pGlobalState->buttons) {
-        const auto BARBUF     = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
-        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
+        Vector2D currentPos;
+
+        if (VERTICAL) {
+            const auto BARBUF = Vector2D{**PHEIGHT, (int)assignedBoxGlobal().h};
+            currentPos        = Vector2D{(BARBUF.x - b.size) / 2.0, BUTTONSRIGHT ? BARBUF.y - **PBARBUTTONPADDING - b.size - offset : offset}.floor();
+        } else {
+            const auto BARBUF = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
+            currentPos        = Vector2D{BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - b.size - offset : offset, (BARBUF.y - b.size) / 2.0}.floor();
+        }
 
         if (VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + **PBARBUTTONPADDING, currentPos.y + b.size)) {
-            // hit on close
             g_pKeybindManager->m_dispatchers["exec"](b.cmd);
             return true;
         }
@@ -351,8 +374,10 @@ void CHyprBar::renderBarTitle(const Vector2D& bufferSize, const float scale) {
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
     static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
     static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
+    static auto* const PVERTICAL         = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
 
     const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
+    const bool         VERTICAL     = **PVERTICAL;
 
     const auto         PWINDOW = m_pWindow.lock();
 
@@ -380,6 +405,13 @@ void CHyprBar::renderBarTitle(const Vector2D& bufferSize, const float scale) {
     cairo_paint(CAIRO);
     cairo_restore(CAIRO);
 
+    // For vertical mode, rotate the context
+    if (VERTICAL) {
+        cairo_translate(CAIRO, bufferSize.x / 2.0, bufferSize.y / 2.0);
+        cairo_rotate(CAIRO, -M_PI / 2.0); // Rotate -90 degrees
+        cairo_translate(CAIRO, -bufferSize.y / 2.0, -bufferSize.x / 2.0);
+    }
+
     // draw title using Pango
     PangoLayout* layout = pango_cairo_create_layout(CAIRO);
     pango_layout_set_text(layout, m_szLastTitle.c_str(), -1);
@@ -392,8 +424,16 @@ void CHyprBar::renderBarTitle(const Vector2D& bufferSize, const float scale) {
     PangoContext* context = pango_layout_get_context(layout);
     pango_context_set_base_dir(context, PANGO_DIRECTION_NEUTRAL);
 
-    const int paddingTotal = scaledBarPadding * 2 + scaledButtonsSize + (std::string{*PALIGN} != "left" ? scaledButtonsSize : 0);
-    const int maxWidth     = std::clamp(static_cast<int>(bufferSize.x - paddingTotal), 0, INT_MAX);
+    // Calculate max width based on orientation
+    int paddingTotal, maxWidth;
+    if (VERTICAL) {
+        // For vertical, we're working with height as width after rotation
+        paddingTotal = scaledBarPadding * 2 + scaledButtonsSize + (std::string{*PALIGN} != "left" ? scaledButtonsSize : 0);
+        maxWidth     = std::clamp(static_cast<int>(bufferSize.y - paddingTotal), 0, INT_MAX);
+    } else {
+        paddingTotal = scaledBarPadding * 2 + scaledButtonsSize + (std::string{*PALIGN} != "left" ? scaledButtonsSize : 0);
+        maxWidth     = std::clamp(static_cast<int>(bufferSize.x - paddingTotal), 0, INT_MAX);
+    }
 
     pango_layout_set_width(layout, maxWidth * PANGO_SCALE);
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
@@ -402,9 +442,18 @@ void CHyprBar::renderBarTitle(const Vector2D& bufferSize, const float scale) {
 
     int layoutWidth, layoutHeight;
     pango_layout_get_size(layout, &layoutWidth, &layoutHeight);
-    const int xOffset = std::string{*PALIGN} == "left" ? std::round(scaledBarPadding + (BUTTONSRIGHT ? 0 : scaledButtonsSize)) :
-                                                         std::round(((bufferSize.x - scaledBorderSize) / 2.0 - layoutWidth / PANGO_SCALE / 2.0));
-    const int yOffset = std::round((bufferSize.y / 2.0 - layoutHeight / PANGO_SCALE / 2.0));
+
+    double xOffset, yOffset;
+    if (VERTICAL) {
+        // After rotation, x becomes y and y becomes x
+        xOffset = std::string{*PALIGN} == "left" ? std::round(scaledBarPadding + (BUTTONSRIGHT ? 0 : scaledButtonsSize)) :
+                                                   std::round(((bufferSize.y - scaledBorderSize) / 2.0 - layoutWidth / PANGO_SCALE / 2.0));
+        yOffset = std::round((bufferSize.x / 2.0 - layoutHeight / PANGO_SCALE / 2.0));
+    } else {
+        xOffset = std::string{*PALIGN} == "left" ? std::round(scaledBarPadding + (BUTTONSRIGHT ? 0 : scaledButtonsSize)) :
+                                                   std::round(((bufferSize.x - scaledBorderSize) / 2.0 - layoutWidth / PANGO_SCALE / 2.0));
+        yOffset = std::round((bufferSize.y / 2.0 - layoutHeight / PANGO_SCALE / 2.0));
+    }
 
     cairo_move_to(CAIRO, xOffset, yOffset);
     pango_cairo_show_layout(CAIRO, layout);
@@ -433,8 +482,11 @@ void CHyprBar::renderBarTitle(const Vector2D& bufferSize, const float scale) {
 }
 
 size_t CHyprBar::getVisibleButtonCount(Hyprlang::INT* const* PBARBUTTONPADDING, Hyprlang::INT* const* PBARPADDING, const Vector2D& bufferSize, const float scale) {
-    float  availableSpace = bufferSize.x - **PBARPADDING * scale * 2;
-    size_t count          = 0;
+    static auto* const PVERTICAL = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
+    const bool         VERTICAL  = **PVERTICAL;
+
+    float              availableSpace = (VERTICAL ? bufferSize.y : bufferSize.x) - **PBARPADDING * scale * 2;
+    size_t             count          = 0;
 
     for (const auto& button : g_pGlobalState->buttons) {
         const float buttonSpace = (button.size + **PBARBUTTONPADDING) * scale;
@@ -453,8 +505,10 @@ void CHyprBar::renderBarButtons(const Vector2D& bufferSize, const float scale) {
     static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
     static auto* const PINACTIVECOLOR    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:inactive_button_color")->getDataStaticPtr();
+    static auto* const PVERTICAL         = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
 
     const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
+    const bool         VERTICAL     = **PVERTICAL;
     const auto         visibleCount = getVisibleButtonCount(PBARBUTTONPADDING, PBARPADDING, bufferSize, scale);
 
     const auto         CAIROSURFACE = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bufferSize.x, bufferSize.y);
@@ -473,8 +527,16 @@ void CHyprBar::renderBarButtons(const Vector2D& bufferSize, const float scale) {
         const auto  scaledButtonSize = button.size * scale;
         const auto  scaledButtonsPad = **PBARBUTTONPADDING * scale;
 
-        const auto  pos   = Vector2D{BUTTONSRIGHT ? bufferSize.x - offset - scaledButtonSize / 2.0 : offset + scaledButtonSize / 2.0, bufferSize.y / 2.0}.floor();
-        auto        color = button.bgcol;
+        Vector2D    pos;
+        if (VERTICAL) {
+            // Stack buttons vertically
+            pos = Vector2D{bufferSize.x / 2.0, BUTTONSRIGHT ? bufferSize.y - offset - scaledButtonSize / 2.0 : offset + scaledButtonSize / 2.0}.floor();
+        } else {
+            // Original horizontal layout
+            pos = Vector2D{BUTTONSRIGHT ? bufferSize.x - offset - scaledButtonSize / 2.0 : offset + scaledButtonSize / 2.0, bufferSize.y / 2.0}.floor();
+        }
+
+        auto color = button.bgcol;
 
         if (**PINACTIVECOLOR > 0) {
             color = m_bWindowHasFocus ? color : CHyprColor(**PINACTIVECOLOR);
@@ -514,8 +576,10 @@ void CHyprBar::renderBarButtonsText(CBox* barBox, const float scale, const float
     static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
     static auto* const PICONONHOVER      = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:icon_on_hover")->getDataStaticPtr();
+    static auto* const PVERTICAL         = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
 
     const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
+    const bool         VERTICAL     = **PVERTICAL;
     const auto         visibleCount = getVisibleButtonCount(PBARBUTTONPADDING, PBARPADDING, Vector2D{barBox->w, barBox->h}, scale);
     const auto         COORDS       = cursorRelativeToBar();
 
@@ -528,9 +592,16 @@ void CHyprBar::renderBarButtonsText(CBox* barBox, const float scale, const float
         const auto scaledButtonsPad = **PBARBUTTONPADDING * scale;
 
         // check if hovering here
-        const auto BARBUF     = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
-        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - button.size - noScaleOffset : noScaleOffset), (BARBUF.y - button.size) / 2.0}.floor();
-        bool       hovering   = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + button.size + **PBARBUTTONPADDING, currentPos.y + button.size);
+        Vector2D currentPos;
+        if (VERTICAL) {
+            const auto BARBUF = Vector2D{**PHEIGHT, (int)assignedBoxGlobal().h};
+            currentPos        = Vector2D{(BARBUF.x - button.size) / 2.0, BUTTONSRIGHT ? BARBUF.y - **PBARBUTTONPADDING - button.size - noScaleOffset : noScaleOffset}.floor();
+        } else {
+            const auto BARBUF = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
+            currentPos        = Vector2D{BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - button.size - noScaleOffset : noScaleOffset, (BARBUF.y - button.size) / 2.0}.floor();
+        }
+
+        bool hovering = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + button.size + **PBARBUTTONPADDING, currentPos.y + button.size);
         noScaleOffset += **PBARBUTTONPADDING + button.size;
 
         if (button.iconTex->m_texID == 0 /* icon is not rendered */ && !button.icon.empty()) {
@@ -544,8 +615,14 @@ void CHyprBar::renderBarButtonsText(CBox* barBox, const float scale, const float
         if (button.iconTex->m_texID == 0)
             continue;
 
-        CBox pos = {barBox->x + (BUTTONSRIGHT ? barBox->width - offset - scaledButtonSize : offset), barBox->y + (barBox->height - scaledButtonSize) / 2.0, scaledButtonSize,
-                    scaledButtonSize};
+        CBox pos;
+        if (VERTICAL) {
+            pos = {barBox->x + (barBox->width - scaledButtonSize) / 2.0, barBox->y + (BUTTONSRIGHT ? barBox->height - offset - scaledButtonSize : offset), scaledButtonSize,
+                   scaledButtonSize};
+        } else {
+            pos = {barBox->x + (BUTTONSRIGHT ? barBox->width - offset - scaledButtonSize : offset), barBox->y + (barBox->height - scaledButtonSize) / 2.0, scaledButtonSize,
+                   scaledButtonSize};
+        }
 
         if (!**PICONONHOVER || (**PICONONHOVER && m_iButtonHoverState > 0))
             g_pHyprOpenGL->renderTexture(button.iconTex, pos, {.a = a});
@@ -788,17 +865,27 @@ void CHyprBar::damageOnButtonHover() {
     static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
     static auto* const PHEIGHT           = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->getDataStaticPtr();
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
-    const bool         BUTTONSRIGHT      = std::string{*PALIGNBUTTONS} != "left";
+    static auto* const PVERTICAL         = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_vertical")->getDataStaticPtr();
+
+    const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
+    const bool         VERTICAL     = **PVERTICAL;
 
     float              offset = **PBARPADDING;
 
     const auto         COORDS = cursorRelativeToBar();
 
     for (auto& b : g_pGlobalState->buttons) {
-        const auto BARBUF     = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
-        Vector2D   currentPos = Vector2D{(BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - b.size - offset : offset), (BARBUF.y - b.size) / 2.0}.floor();
+        Vector2D currentPos;
 
-        bool       hover = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + **PBARBUTTONPADDING, currentPos.y + b.size);
+        if (VERTICAL) {
+            const auto BARBUF = Vector2D{**PHEIGHT, (int)assignedBoxGlobal().h};
+            currentPos        = Vector2D{(BARBUF.x - b.size) / 2.0, BUTTONSRIGHT ? BARBUF.y - **PBARBUTTONPADDING - b.size - offset : offset}.floor();
+        } else {
+            const auto BARBUF = Vector2D{(int)assignedBoxGlobal().w, **PHEIGHT};
+            currentPos        = Vector2D{BUTTONSRIGHT ? BARBUF.x - **PBARBUTTONPADDING - b.size - offset : offset, (BARBUF.y - b.size) / 2.0}.floor();
+        }
+
+        bool hover = VECINRECT(COORDS, currentPos.x, currentPos.y, currentPos.x + b.size + **PBARBUTTONPADDING, currentPos.y + b.size);
 
         if (hover != m_bButtonHovered) {
             m_bButtonHovered = hover;
